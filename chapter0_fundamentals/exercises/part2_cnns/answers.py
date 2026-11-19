@@ -42,3 +42,67 @@ from plotly_utils import line
 # On machines with many cores the default of one
 # thread per core makes small CPU tensor operations much slower
 t.set_num_threads(min(4, t.get_num_threads()))
+
+
+# %%
+
+class ReLU(nn.Module):
+    def forward(self, x: Tensor) -> Tensor:
+        return (x > 0.0) * x
+
+tests.test_relu(ReLU)
+
+
+# %%
+
+# [0, 1) to [new_min, new_max)
+def scale(tensor: Tensor, new_min: float, new_max: float):
+    return (tensor * (new_max - new_min) + new_min)
+
+class Linear(nn.Module):
+    def __init__(self, in_features: int, out_features: int, bias=True):
+        """
+        A simple linear (technically, affine) transformation.
+
+        The fields should be named `weight` and `bias` for compatibility with PyTorch.
+        If `bias` is False, set `self.bias` to None.
+        """
+        super().__init__()
+        dx = 1.0 / in_features**0.5
+        self.weight = nn.Parameter(
+            scale(t.rand((out_features, in_features)), -dx, dx)
+        )
+        if bias:
+            self.bias = nn.Parameter(
+                scale(t.rand((out_features,)), -dx, dx)
+            )
+        else:
+            self.bias = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        x: shape (*, in_features)
+        Return: shape (*, out_features)
+        """
+        scaled = einops.einsum(
+            self.weight,
+            x,
+            '... out in, ... in -> ... out'
+        )
+        if self.bias is None:
+            return scaled
+        else:
+            return scaled + self.bias
+
+    def extra_repr(self) -> str:
+        out, in_ = self.weight.shape
+        has_bias = self.bias is not None
+        return f"in_={in_}, out={out}, bias={has_bias}"
+
+
+tests.test_linear_parameters(Linear, bias=False)
+tests.test_linear_parameters(Linear, bias=True)
+tests.test_linear_forward(Linear, bias=False)
+tests.test_linear_forward(Linear, bias=True)
+print(Linear(3, 4))
+print(Linear(3, 4, False))
