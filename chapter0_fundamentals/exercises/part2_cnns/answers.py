@@ -215,4 +215,131 @@ assert label == label_batch[0].item()
 #    before the 2's.
 
 # Q: What might the problem be if we didn't shuffle?
-# A: ?
+# A: The weights would learn to always return 1, then to always return 2, etc.,
+#    instead of learning features which are universally useful throughout the
+#    entire dataset.
+
+# %%
+
+device = t.device("mps" if t.backends.mps.is_available() else "cuda" if t.cuda.is_available() else "cpu")
+
+# If this is CPU, we recommend figuring out how to get cuda access (or MPS if you're on a Mac).
+print(device)
+
+# %%
+
+model = SimpleMLP().to(device)
+
+batch_size = 128
+epochs = 3
+
+mnist_trainset, _ = get_mnist()
+mnist_trainloader = DataLoader(mnist_trainset, batch_size=batch_size, shuffle=True)
+
+optimizer = t.optim.Adam(model.parameters(), lr=1e-3)
+loss_list = []
+
+for epoch in range(epochs):
+    pbar = tqdm(mnist_trainloader)
+
+    for imgs, labels in pbar:
+        # Move data to device, perform forward pass
+        imgs, labels = (imgs).to(device), labels.to(device)
+        logits = model(imgs)
+
+        # Calculate loss, perform backward pass
+        loss = F.cross_entropy(logits, labels)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+        # Update logs & progress bar
+        loss_list.append(loss.item())
+        pbar.set_postfix(epoch=f"{epoch + 1}/{epochs}", loss=f"{loss:.3f}", refresh=False)
+
+line(
+    loss_list,
+    x_max=epochs * len(mnist_trainset),
+    labels={"x": "Examples seen", "y": "Cross entropy loss"},
+    title="SimpleMLP training on MNIST",
+    width=700,
+)
+
+# %%
+
+@dataclass
+class SimpleMLPTrainingArgs:
+    """
+    Defining this class implicitly creates an __init__ method, which sets arguments as below, e.g.
+    self.batch_size=64. Any of these fields can also be overridden when you create an instance, e.g.
+    SimpleMLPTrainingArgs(batch_size=128).
+    """
+
+    batch_size: int = 64
+    epochs: int = 3
+    learning_rate: float = 1e-3
+
+
+def train(args: SimpleMLPTrainingArgs) -> tuple[list[float], SimpleMLP]:
+    """
+    Trains & returns the model, using training parameters from the `args` object. Returns the loss
+    list, and the model.
+    """
+    model = SimpleMLP().to(device)
+
+    mnist_trainset, mnist_testset = get_mnist()
+    mnist_trainloader = DataLoader(mnist_trainset, batch_size=args.batch_size, shuffle=True)
+    mnist_testloader = DataLoader(mnist_testset, batch_size=args.batch_size, shuffle=False)
+
+    optimizer = t.optim.Adam(model.parameters(), lr=args.learning_rate)
+    loss_list = []
+
+    for epoch in range(args.epochs):
+        # train
+        pbar = tqdm(mnist_trainloader)
+        for imgs, labels in pbar:
+            # Move data to device, perform forward pass
+            imgs, labels = imgs.to(device), labels.to(device)
+            logits = model(imgs)
+
+            # Calculate loss, perform backward pass
+            loss = F.cross_entropy(logits, labels)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            # Update logs & progress bar
+            loss_list.append(loss.item())
+            pbar.set_postfix(epoch=f"{epoch + 1}/{args.epochs}", loss=f"{loss:.3f}", refresh=False)
+
+        # calculate validity
+        with t.no_grad():
+            pbar = tqdm(mnist_testloader)
+            correct_count = 0.0
+            total_count = 0.0
+            for imgs, labels in pbar:
+                # Move data to device, perform forward pass
+                imgs, labels = imgs.to(device), labels.to(device)
+                logits = model(imgs)
+
+                correct_count += (logits.argmax(dim=-1) == labels).sum().item()
+                total_count += labels.shape[0]
+
+                # Update progress bar
+                pbar.set_postfix(epoch=f"{epoch + 1}/{args.epochs}", correct_count=f"{correct_count}", refresh=False)
+        validity = correct_count / total_count * 100
+        print(f'validity: {validity:.2f}%')
+
+    return loss_list, model
+
+
+args = SimpleMLPTrainingArgs()
+loss_list, model = train(args)
+
+line(
+    loss_list,
+    x_max=args.epochs * len(mnist_trainset),
+    labels={"x": "Examples seen", "y": "Cross entropy loss"},
+    title="SimpleMLP training on MNIST",
+    width=700,
+)
