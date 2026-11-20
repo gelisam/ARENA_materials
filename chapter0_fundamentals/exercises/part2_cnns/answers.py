@@ -157,3 +157,62 @@ class SimpleMLP(nn.Module):
 
 tests.test_mlp_module(SimpleMLP)
 tests.test_mlp_forward(SimpleMLP)
+
+
+# %%
+
+MNIST_TRANSFORM = transforms.Compose(
+    [
+        transforms.ToImage(),
+        transforms.ToDtype(t.float32, scale=True),
+        transforms.Normalize([0.1307], [0.3081]),
+    ]
+)
+
+
+def get_mnist(trainset_size: int = 10_000, testset_size: int = 1_000) -> tuple[Subset, Subset]:
+    """Returns a subset of MNIST training data."""
+
+    # Get original datasets, which are downloaded to "./data" for future use
+    mnist_trainset = datasets.MNIST(exercises_dir / "data", train=True, download=True, transform=MNIST_TRANSFORM)
+    mnist_testset = datasets.MNIST(exercises_dir / "data", train=False, download=True, transform=MNIST_TRANSFORM)
+
+    # # Return a subset of the original datasets
+    mnist_trainset = Subset(mnist_trainset, indices=range(trainset_size))
+    mnist_testset = Subset(mnist_testset, indices=range(testset_size))
+
+    return mnist_trainset, mnist_testset
+
+
+mnist_trainset, mnist_testset = get_mnist()
+mnist_trainloader = DataLoader(mnist_trainset, batch_size=64, shuffle=True)
+mnist_testloader = DataLoader(mnist_testset, batch_size=64, shuffle=False)
+
+# Get the first batch of test data, by starting to iterate over `mnist_testloader`
+for img_batch, label_batch in mnist_testloader:
+    print(f"{img_batch.shape=}\n{label_batch.shape=}\n")
+    break
+
+# Get the first datapoint in the test set, by starting to iterate over `mnist_testset`
+for img, label in mnist_testset:
+    print(f"{img.shape=}\n{label=}\n")
+    break
+
+t.testing.assert_close(img, img_batch[0])
+assert label == label_batch[0].item()
+
+# %%
+
+# Q: Why do we include a data normalization function in torchvision.transforms ?
+# A: Since the data is multiplied by the weights, twice-as-large data leads to
+#    twice-as-large outputs and twice-as-large gradients, which would lead to a
+#    twice-as-large learning rate. Normalizing the data removes that factor from
+#    the difficult question of choosing the learning rate. Off-center data, say,
+#    centered around 1.0 instead of 0.0 would similarly appear twice-as-large.
+
+# Q: What is the benefit of using shuffle=True when defining our dataloaders?
+# A: Avoids any structure from the dataset, e.g. if all the 1's are listed
+#    before the 2's.
+
+# Q: What might the problem be if we didn't shuffle?
+# A: ?
