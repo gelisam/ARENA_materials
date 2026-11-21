@@ -377,3 +377,40 @@ tests.rand_float_test(MLP, [2, 4, 768])
 # ln2's output, not cache["normalized", 0, "ln2"], which is before `* w + b` since TransformerLens 3:
 # https://github.com/TransformerLensOrg/TransformerLens/pull/770
 tests.load_gpt2_test(MLP, reference_gpt2.blocks[0].mlp, reference_gpt2.blocks[0].ln2(cache["resid_mid", 0]))
+
+# %%
+
+x = t.tensor([[1.0,2.0,29.0],[-1.0,2.0,31.0]])
+x = t.tensor([[1.0,0.0,0.0],[0.0,1.0,0.0]])
+mean1 = x.mean(dim=0,keepdim=True)
+mean2 = x.mean(dim=1,keepdim=True)
+print(mean1)
+print(mean2)
+print(x - mean1)
+print(x - mean2)
+
+# %%
+
+class Unembed(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.W_U = nn.Parameter(t.empty((cfg.d_model, cfg.d_vocab)))
+        nn.init.normal_(self.W_U, std=self.cfg.init_range)
+        self.b_U = nn.Parameter(t.zeros((cfg.d_vocab)), requires_grad=False)
+
+    def forward(
+        self, normalized_resid_final: Float[Tensor, "batch position d_model"]
+    ) -> Float[Tensor, "batch position d_vocab"]:
+        return einops.einsum(
+            normalized_resid_final,
+            self.W_U,
+            'batch position d_model, d_model d_vocab -> batch position d_vocab'
+        ) + self.b_U
+
+
+tests.test_unembed(Unembed)
+tests.rand_float_test(Unembed, [2, 4, 768])
+# ln_final's output, not cache["ln_final.hook_normalized"], which is before `* w + b` since TransformerLens 3:
+# https://github.com/TransformerLensOrg/TransformerLens/pull/770
+tests.load_gpt2_test(Unembed, reference_gpt2.unembed, reference_gpt2.ln_final(cache["resid_post", 11]))
