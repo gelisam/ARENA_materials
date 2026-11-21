@@ -343,3 +343,28 @@ line(
     title="SimpleMLP training on MNIST",
     width=700,
 )
+
+# %%
+
+# Q: Why would convolutional layers be less likely to overfit data than standard
+#    linear (fully connected) layers?
+# A: To a first approximation, the model behaves as if it received a much larger
+#    dataset, containing all the images but shifted by every possible (dx, dy).
+#    This prevents the model from overfitting to the part of the image where
+#    certain features happen to be located within the dataset, e.g. only
+#    recognizing shoes when they are in the bottom part of the image.
+#
+# Q: Suppose you fixed some random permutation of the pixels in an image, and
+#    applied this to all images in your dataset, before training a convolutional
+#    neural network for classifying images. Do you expect this to be less
+#    effective, or equally effective?
+# A: Much less effective, because this breaks the assumption that nearby pixels
+#    are related, e.g. that all the pixels of a shoe are going to be next to
+#    each other. The convolution is going to force the model to groups pixels
+#    which contain unrelated objects. 
+#
+# Q: If you have a 28x28 RGB image (i.e. 3 input channels), and you apply a 3x3
+#    convolution with stride 2, padding 1, and 5 output channels, what shape
+#    will the output be?
+# A: 28x28 -> 30x30 -> 27x27 -> 5x13x13
+#    (oops!)
