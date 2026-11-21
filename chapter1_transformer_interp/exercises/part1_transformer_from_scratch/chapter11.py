@@ -154,3 +154,36 @@ class Config:
 
 cfg = Config()
 print(cfg)
+
+# %%
+
+class LayerNorm(nn.Module):
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.cfg = cfg
+        self.w = nn.Parameter(t.ones(cfg.d_model))
+        self.b = nn.Parameter(t.zeros(cfg.d_model))
+
+    def forward(self, residual: Float[Tensor, "batch posn d_model"]) -> Float[Tensor, "batch posn d_model"]:
+        # var = sum (a*x)**2
+        #     = sum a**2 * x**2
+        mean = residual.mean(dim=-1, keepdim=True)
+        variance = residual.var(dim=-1, keepdim=True, correction=0)
+        std = (variance + self.cfg.layer_norm_eps)**0.5
+
+        normalized = (residual - mean) / std
+        if cfg.debug:
+            print("my debug")
+            print(self.w.shape)
+            print(self.b.shape)
+            print(residual.shape)
+            print(mean.shape)
+            print(variance.shape)
+            print(normalized.mean(dim=-1))
+            print(normalized.var(dim=-1, correction=0))
+        return normalized * self.w + self.b
+
+
+tests.rand_float_test(LayerNorm, [2, 4, 768])
+tests.test_layer_norm_epsilon(LayerNorm, cache["resid_post", 11])
+tests.load_gpt2_test(LayerNorm, reference_gpt2.ln_final, cache["resid_post", 11])
