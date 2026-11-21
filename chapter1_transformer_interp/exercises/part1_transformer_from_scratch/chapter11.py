@@ -259,3 +259,88 @@ class Attention(nn.Module):
 
 
 tests.test_causal_mask(Attention.apply_causal_mask)
+
+# %%
+
+class Attention(nn.Module):
+    IGNORE: Float[Tensor, ""]
+
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.cfg = cfg
+        self.W_Q = nn.Parameter(t.empty((cfg.n_heads, cfg.d_model, cfg.d_head)))
+        self.W_K = nn.Parameter(t.empty((cfg.n_heads, cfg.d_model, cfg.d_head)))
+        self.W_V = nn.Parameter(t.empty((cfg.n_heads, cfg.d_model, cfg.d_head)))
+        self.W_O = nn.Parameter(t.empty((cfg.n_heads, cfg.d_head, cfg.d_model)))
+        self.b_Q = nn.Parameter(t.zeros((cfg.n_heads, cfg.d_head)))
+        self.b_K = nn.Parameter(t.zeros((cfg.n_heads, cfg.d_head)))
+        self.b_V = nn.Parameter(t.zeros((cfg.n_heads, cfg.d_head)))
+        self.b_O = nn.Parameter(t.zeros((cfg.d_model)))
+        nn.init.normal_(self.W_Q, std=self.cfg.init_range)
+        nn.init.normal_(self.W_K, std=self.cfg.init_range)
+        nn.init.normal_(self.W_V, std=self.cfg.init_range)
+        nn.init.normal_(self.W_O, std=self.cfg.init_range)
+        self.register_buffer("IGNORE", t.tensor(float("-inf"), dtype=t.float32, device=device))
+
+    def forward(self, normalized_resid_pre: Float[Tensor, "batch posn d_model"]) -> Float[Tensor, "batch posn d_model"]:
+        queries = einops.einsum(
+            normalized_resid_pre,
+            self.W_Q,
+            'batch posn d_model, n_heads d_model d_head -> batch posn n_heads d_head'
+        ) + self.b_Q
+        keys = einops.einsum(
+            normalized_resid_pre,
+            self.W_K,
+            'batch posn d_model, n_heads d_model d_head -> batch posn n_heads d_head'
+        ) + self.b_K
+        values = einops.einsum(
+            normalized_resid_pre,
+            self.W_V,
+            'batch posn d_model, n_heads d_model d_head -> batch posn n_heads d_head'
+        ) + self.b_V
+        omniscient_scores = einops.einsum(
+            queries,
+            keys,
+            'batch posQ n_heads d_head, batch posK n_heads d_head -> batch n_heads posQ posK'
+        )
+        masked_scores = self.apply_causal_mask(omniscient_scores)
+        scaled_scores = masked_scores / self.cfg.d_head**0.5
+        probs = t.softmax(scaled_scores, dim=-1)
+        z = einops.einsum(
+            probs,
+            values,
+            'batch n_heads posQ posK, batch posK n_heads d_head -> batch posQ n_heads d_head'
+        )
+        output = einops.einsum(
+            z,
+            self.W_O,
+            'batch posn n_heads d_head, n_heads d_head d_model -> batch posn d_model'
+        ) + self.b_O
+        return output
+
+    def apply_causal_mask(
+        self, attn_scores: Float[Tensor, "batch n_heads query_pos key_pos"]
+    ) -> Float[Tensor, "batch n_heads query_pos key_pos"]:
+        """
+        Applies a causal mask to attention scores, and returns masked scores.
+        """
+        # You should copy your solution from earlier
+        batch, n_heads, query_pos, key_pos = attn_scores.shape
+        query_i = einops.repeat(
+            t.arange(query_pos),
+            'query_pos -> query_pos key_pos',
+            key_pos=key_pos
+        )
+        key_i = einops.repeat(
+            t.arange(key_pos),
+            'key_pos -> query_pos key_pos',
+            query_pos=query_pos
+        )
+        return t.where(key_i <= query_i, attn_scores, self.IGNORE)
+
+
+tests.test_causal_mask(Attention.apply_causal_mask)
+tests.rand_float_test(Attention, [2, 4, 768])
+# ln1's output, not cache["normalized", 0, "ln1"], which is before `* w + b` since TransformerLens 3:
+# https://github.com/TransformerLensOrg/TransformerLens/pull/770
+tests.load_gpt2_test(Attention, reference_gpt2.blocks[0].attn, reference_gpt2.blocks[0].ln1(cache["resid_pre", 0]))
