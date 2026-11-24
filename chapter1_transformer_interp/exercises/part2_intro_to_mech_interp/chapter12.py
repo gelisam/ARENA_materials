@@ -349,3 +349,44 @@ imshow(
     width=900,
     height=350,
 )
+
+# %%
+
+# There is an effect on 0.11, so head 0.11 does attend to itself. Perhaps it is
+# computing a calculation, since there are no MLP layers?
+
+# %%
+
+def head_self_attention_override_hook(
+    attn_scores: Float[Tensor, "batch n_heads seqQ seqK"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+) -> None:
+    batch, n_heads, seqQ, seqK = attn_scores.shape
+    attn_scores[:, head_index_to_ablate, :, :] = t.where(t.eye(seqQ) == 1, 1.0, -float('inf'))
+    return attn_scores
+
+# %%
+
+self_attention_override_scores = get_ablation_scores(
+    model,
+    rep_tokens_batch,
+    ablation_function=head_self_attention_override_hook,
+    neuron_name = "attn_scores"
+)
+
+# %%
+
+imshow(
+    self_attention_override_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Forcing Self-Attention",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+
+# %%
+
+# Forcing self-attention _improves_ the loss, so head 0.11 is trying to learn to
+# compute something about its own position. But what?
