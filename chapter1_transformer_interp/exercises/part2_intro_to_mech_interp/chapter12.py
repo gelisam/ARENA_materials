@@ -309,4 +309,43 @@ imshow(
     height=350,
 )
 
+# %% Bonus: understand heads 0.4 and 0.11
+
+display(
+    cv.attention.attention_patterns(
+        tokens=model.to_str_tokens(rep_tokens[0]),
+        attention=rep_cache["pattern", 0],
+    )
+)
+
 # %%
+
+def head_self_attention_ablation_hook(
+    attn_scores: Float[Tensor, "batch n_heads seqQ seqK"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+) -> None:
+    batch, n_heads, seqQ, seqK = attn_scores.shape
+    attn_scores[:, head_index_to_ablate, :, :] -= t.eye(seqQ) * float('inf')
+    return attn_scores
+
+# %%
+
+rep_tokens_batch = run_and_cache_model_repeated_tokens(model, seq_len=50, batch_size=10)[0]
+self_attention_ablation_scores = get_ablation_scores(
+    model,
+    rep_tokens_batch,
+    ablation_function=head_self_attention_ablation_hook,
+    neuron_name = "attn_scores"
+)
+
+# %%
+
+imshow(
+    self_attention_ablation_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Ablating Self-Attention",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
