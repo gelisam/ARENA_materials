@@ -291,7 +291,7 @@ tests.test_head_mean_ablation_hook(head_mean_ablation_hook)
 
 # %%
 
-rep_tokens_batch = run_and_cache_model_repeated_tokens(model, seq_len=50, batch_size=10)[0]
+rep_tokens_batch, _, _ = run_and_cache_model_repeated_tokens(model, seq_len=50, batch_size=10)
 mean_ablation_scores = get_ablation_scores(
     model,
     rep_tokens_batch,
@@ -331,7 +331,6 @@ def head_self_attention_ablation_hook(
 
 # %%
 
-rep_tokens_batch = run_and_cache_model_repeated_tokens(model, seq_len=50, batch_size=10)[0]
 self_attention_ablation_scores = get_ablation_scores(
     model,
     rep_tokens_batch,
@@ -390,3 +389,9 @@ imshow(
 
 # Forcing self-attention _improves_ the loss, so head 0.11 is trying to learn to
 # compute something about its own position. But what?
+#
+# Well, there are only two pieces of data at that position: the token's
+# embedding, and the position's embedding. It's probably the position.
+
+# %%
+
