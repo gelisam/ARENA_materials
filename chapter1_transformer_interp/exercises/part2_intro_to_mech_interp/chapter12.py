@@ -395,3 +395,161 @@ imshow(
 
 # %%
 
+def record_to_cell(
+    x: Float[Tensor, "batch seq n_heads d_head"],
+    hook: HookPoint,
+    cell: list[Float[Tensor, "batch seq n_heads d_head"]]
+):
+    cell[0] = x
+
+def zero_out_embed(
+    embed: Float[Tensor, "batch seq d_model"],
+    hook: HookPoint,
+):
+    return embed * 0.0
+
+recorded_q = [None]
+recorded_k = [None]
+recorded_v = [None]
+
+model.run_with_hooks(
+    rep_tokens,
+    return_type=None,
+    fwd_hooks=[
+        ("hook_embed", zero_out_embed),
+        (utils.get_act_name("q", 0), functools.partial(record_to_cell, cell=recorded_q)),
+        (utils.get_act_name("k", 0), functools.partial(record_to_cell, cell=recorded_k)),
+        (utils.get_act_name("v", 0), functools.partial(record_to_cell, cell=recorded_v)),
+    ],
+)
+q_without_token = recorded_q[0]
+k_without_token = recorded_k[0]
+v_without_token = recorded_v[0]
+
+model.run_with_hooks(
+    rep_tokens,
+    return_type=None,
+    fwd_hooks=[
+        ("hook_pos_embed", zero_out_embed),
+        (utils.get_act_name("q", 0), functools.partial(record_to_cell, cell=recorded_q)),
+        (utils.get_act_name("k", 0), functools.partial(record_to_cell, cell=recorded_k)),
+        (utils.get_act_name("v", 0), functools.partial(record_to_cell, cell=recorded_v)),
+    ],
+)
+q_without_pos = recorded_q[0]
+k_without_pos = recorded_k[0]
+v_without_pos = recorded_v[0]
+# %%
+
+def ablate_info(
+    x: Float[Tensor, "batch seq n_heads d_head"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+    without_info: Float[Tensor, "batch seq n_heads d_head"],
+) -> None:
+    x[:,:,head_index_to_ablate] = without_info[:,:,head_index_to_ablate]
+
+q_without_token_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=q_without_token),
+    neuron_name = "q"
+)
+k_without_token_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=k_without_token),
+    neuron_name = "k"
+)
+v_without_token_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=v_without_token),
+    neuron_name = "v"
+)
+q_without_pos_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=q_without_pos),
+    neuron_name = "q"
+)
+k_without_pos_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=k_without_pos),
+    neuron_name = "k"
+)
+v_without_pos_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=v_without_pos),
+    neuron_name = "v"
+)
+
+# %%
+
+imshow(
+    q_without_token_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping tokens from Q",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    k_without_token_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping tokens from K",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    v_without_token_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping tokens from V",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    q_without_pos_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping pos from Q",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    k_without_pos_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping pos from K",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    v_without_pos_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping pos from V",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+
+# %%
+
+# Head 0.11 attends to itself, so messing with Q or K but not both is increasing
+# the loss, but that does not give us new information. What is more interesting
+# is that dropping the token information from V increases the loss, while
+# removing the position does not have any effect. This would allow us to
+# conclude that head 0.11 is computing something about its token, except that
+# ablating the position had zero effect on every head in layer 0, which seems
+# very unlikely! Is the position not given to the V matrix?
+#
+# Ah, indeed, the document said this earlier:
+# > The positional embeddings are only added to the residual stream before
+# > calculating each key and query vector in the attention layers as opposed to
+# > the token embeddings - i.e. we compute queries as Q = (resid + pos_embed) @
+# > W_Q + b_Q and same for keys, but values as V = resid @ W_V + b_V. This means
+# > that the residual stream can't directly encode positional information.
