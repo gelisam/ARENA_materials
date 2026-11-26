@@ -222,6 +222,7 @@ def get_ablation_scores(
     model: HookedTransformer,
     tokens: Int[Tensor, "batch seq"],
     ablation_function: Callable = head_zero_ablation_hook,
+    permanent_hooks = [],
     neuron_name: str = "z"
 ) -> Float[Tensor, "n_layers n_heads"]:
     """
@@ -234,7 +235,11 @@ def get_ablation_scores(
     # Calculating loss without any ablation, to act as a baseline
     model.reset_hooks()
     seq_len = (tokens.shape[1] - 1) // 2
-    logits = model(tokens, return_type="logits")
+    logits = model.run_with_hooks(
+        tokens,
+        return_type="logits",
+        fwd_hooks=permanent_hooks
+    )
     loss_no_ablation = -get_log_probs(logits, tokens)[:, -(seq_len - 1) :].mean()
 
     for layer in tqdm(range(model.cfg.n_layers)):
@@ -242,7 +247,7 @@ def get_ablation_scores(
             logits = model.run_with_hooks(
                 tokens,
                 return_type='logits',
-                fwd_hooks=[(utils.get_act_name(neuron_name, layer), functools.partial(ablation_function, head_index_to_ablate=head))],
+                fwd_hooks=permanent_hooks+[(utils.get_act_name(neuron_name, layer), functools.partial(ablation_function, head_index_to_ablate=head))],
             )  # b seq n_vocab
             loss_with_ablation = -get_log_probs(logits, tokens)[:, -(seq_len - 1) :].mean()
             ablation_scores[layer, head] = loss_with_ablation - loss_no_ablation
@@ -641,3 +646,94 @@ imshow(
 # Head 1.10 (and to a lesser extend 1.4) uses the value computed by head 0.11 in
 # order to construct its own V. Those are precisely the induction heads, so we
 # are on the right track!
+
+# In an induction circuit, the layer 0 head uses the position embedding to
+# obtain the token at the previous position. Then, the layer 1 head uses that
+# previous position as the K, so that Q can find the position whose preceding
+# token is the same as Q's, and return that position's token.
+#
+# Layer 0's task is difficult, because the position embedding for the previous
+# token is very similar to the position embedding of the current token. Thus, it
+# seems likely that layer 0 will return a mix of the previous and current token,
+# and thus that layer 1 will find a mix of the correct position (the one whose
+# _previous_ position holds Q's token) and a few incorrect positions: those
+# whose _current_ position hold's Q's token. Both incorrect cases have a V which
+# is the same as Q's token, so layer 1's result will be a mix of the correct
+# token and Q's token. It thus makes sense to take this mixture, and to reduce
+# the probability of the current token. Might this be how 1.10 uses 0.11's
+# output?
+#
+# To determine that, let's ablate 0.11 again, but this time let's also do its
+# work ourselves, by reducing the probability of Q's token in the final logits.
+# If I am right, then the effect of ablating 0.11 should disappear.
+
+# %%
+
+a = t.tensor([[[1,2],[3,4]], [[4,5],[6,7]]])
+b = t.tensor([1, 0])
+r = t.arange(a.shape[0])
+a[:, r, b] = 0
+print(a)
+
+# %%
+
+def never_return_self_token(
+      out: Float[Tensor, "batch seq d_vocab"],
+      hook: HookPoint
+):
+    # rep_tokens :: batch seq
+    r = t.arange(out.shape[1])
+    out[:, r, rep_tokens] = -float('inf')
+
+q_without_head011_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=q_without_head011),
+    permanent_hooks=[("unembed.hook_out", never_return_self_token)],
+    neuron_name = "q"
+)
+k_without_head011_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=k_without_head011),
+    permanent_hooks=[("unembed.hook_out", never_return_self_token)],
+    neuron_name = "k"
+)
+v_without_head011_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=v_without_head011),
+    permanent_hooks=[("unembed.hook_out", never_return_self_token)],
+    neuron_name = "v"
+)
+
+# %%
+
+imshow(
+    q_without_head011_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping head 0.11 from Q",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    k_without_head011_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping head 0.11 from K",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    v_without_head011_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping head 0.11 from V",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+
+# %%
+
+# No effect, I was wrong.
