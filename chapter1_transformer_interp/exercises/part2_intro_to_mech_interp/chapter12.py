@@ -684,6 +684,7 @@ def never_return_self_token(
     # rep_tokens :: batch seq
     r = t.arange(out.shape[1])
     out[:, r, rep_tokens] = -float('inf')
+    return out
 
 q_without_head011_scores = get_ablation_scores(
     model,
@@ -736,4 +737,27 @@ imshow(
 
 # %%
 
-# No effect, I was wrong.
+# No effect, I was wrong. Maybe it has a direct effect on the final logits, via
+# the residual stream?
+
+mean_ablation_scores = get_ablation_scores(
+    model,
+    rep_tokens_batch,
+    ablation_function=head_mean_ablation_hook,
+    permanent_hooks=[("unembed.hook_out", never_return_self_token)]
+)
+
+# %%
+
+imshow(
+    mean_ablation_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping Head Mean",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+
+# %%
+
+# No effect either. What else could it be?
