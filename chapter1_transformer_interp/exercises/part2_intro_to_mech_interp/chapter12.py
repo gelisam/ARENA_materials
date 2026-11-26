@@ -553,3 +553,91 @@ imshow(
 # > the token embeddings - i.e. we compute queries as Q = (resid + pos_embed) @
 # > W_Q + b_Q and same for keys, but values as V = resid @ W_V + b_V. This means
 # > that the residual stream can't directly encode positional information.
+
+# %%
+
+# New approach: let's find a circuit! Which heads in layer 1 depend on 0.11?
+# Let's see what happens when each layer 1 head receives a residual which does
+# not include 0.11's contribution.
+
+recorded_q = [None]
+recorded_k = [None]
+recorded_v = [None]
+
+model.run_with_hooks(
+    rep_tokens,
+    return_type=None,
+    fwd_hooks=[
+        (utils.get_act_name("z", 0), functools.partial(head_zero_ablation_hook, head_index_to_ablate=11)),
+        (utils.get_act_name("q", 1), functools.partial(record_to_cell, cell=recorded_q)),
+        (utils.get_act_name("k", 1), functools.partial(record_to_cell, cell=recorded_k)),
+        (utils.get_act_name("v", 1), functools.partial(record_to_cell, cell=recorded_v)),
+    ],
+)
+
+q_without_head011 = recorded_q[0]
+k_without_head011 = recorded_k[0]
+v_without_head011 = recorded_v[0]
+
+# %%
+
+def ablate_info(
+    x: Float[Tensor, "batch seq n_heads d_head"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+    without_info: Float[Tensor, "batch seq n_heads d_head"],
+) -> None:
+    if hook.layer() == 1:
+        x[:,:,head_index_to_ablate] = without_info[:,:,head_index_to_ablate]
+        return x
+
+q_without_head011_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=q_without_head011),
+    neuron_name = "q"
+)
+k_without_head011_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=k_without_head011),
+    neuron_name = "k"
+)
+v_without_head011_scores = get_ablation_scores(
+    model,
+    rep_tokens,
+    ablation_function=functools.partial(ablate_info, without_info=v_without_head011),
+    neuron_name = "v"
+)
+
+# %%
+
+imshow(
+    q_without_head011_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping head 0.11 from Q",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    k_without_head011_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping head 0.11 from K",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    v_without_head011_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After Dropping head 0.11 from V",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+# %%
+
+# Head 1.10 (and to a lesser extend 1.4) uses the value computed by head 0.11 in
+# order to construct its own V. Those are precisely the induction heads, so we
+# are on the right track!
