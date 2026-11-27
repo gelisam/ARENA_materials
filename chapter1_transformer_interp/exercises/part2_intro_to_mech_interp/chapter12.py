@@ -765,35 +765,46 @@ imshow(
 # Well, the loss is different. So it must be affecting the final logits in some
 # way. Let's examine what that effect is.
 
-tokens = rep_tokens[0] # seq
+tokens = rep_tokens_batch # batch seq
 
-# seq d_vocab
-logits = model(rep_tokens, return_type="logits")[0]
+# batch seq d_vocab
+logits = model(rep_tokens_batch, return_type="logits")
 logits_without011 = model.run_with_hooks(
-    rep_tokens,
+    rep_tokens_batch,
     return_type="logits",
     fwd_hooks=[(utils.get_act_name("result", 0), functools.partial(head_zero_ablation_hook, head_index_to_ablate=11))],
-)[0]
+)
 
 # %%
 
-seq = tokens.shape[0]
+batch, seq = rep_tokens_batch.shape
+
+# batch seq d_vocab
 differences = logits - logits_without011
-squares = differences ** 2
 
-# print the impact on the correct token, the current token, and the 3 other
-# tokens with the largest squared difference.
-correct_token = tokens[1:]
-logits_with_known_answer = logits[:-1]
-tokens_with_known_answer = tokens[:-1]
-str_tokens_with_known_answer = str_tokens[:-1]
-differences_with_known_answer = differences[:-1]
-current_logit = logits_with_known_answer[t.arange(seq-1), tokens_with_known_answer]
-correct_logit = logits_with_known_answer[t.arange(seq-1), correct_token]
-current_token_impact = differences_with_known_answer[t.arange(seq-1), tokens_with_known_answer]
-correct_token_impact = differences_with_known_answer[t.arange(seq-1), correct_token]
+# batch seq-1
+correct_token = rep_tokens_batch[:, 1:]
+current_token = rep_tokens_batch[:, :-1]
 
-imshow(t.stack([current_token_impact, correct_token_impact]))
+# batch seq-1 d_vocab
+logits = logits[:, :-1]
+differences = differences[:, :-1]
+
+batch_ix = einops.repeat(t.arange(batch), "batch -> batch seq", seq=seq-1)
+seq_ix = einops.repeat(t.arange(seq-1), "seq -> batch seq", batch=batch)
+
+# batch seq-1
+current_token_impact = differences[batch_ix, seq_ix, current_token]
+correct_token_impact = differences[batch_ix, seq_ix, correct_token]
+
+# seq-1
+current_token_impact = current_token_impact.mean(dim=0)
+correct_token_impact = correct_token_impact.mean(dim=0)
+
+# 2 seq-1
+results = t.stack([current_token_impact, correct_token_impact], dim=0)
+
+imshow(results)
 
 # %%
 
