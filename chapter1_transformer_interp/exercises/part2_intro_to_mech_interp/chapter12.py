@@ -761,3 +761,44 @@ imshow(
 # %%
 
 # No effect either. What else could it be?
+#
+# Well, the loss is different. So it must be affecting the final logits in some
+# way. Let's examine what that effect is.
+
+tokens = rep_tokens[0] # seq
+
+# seq d_vocab
+logits = model(rep_tokens, return_type="logits")[0]
+logits_without011 = model.run_with_hooks(
+    rep_tokens,
+    return_type="logits",
+    fwd_hooks=[(utils.get_act_name("result", 0), functools.partial(head_zero_ablation_hook, head_index_to_ablate=11))],
+)[0]
+
+# %%
+
+seq = tokens.shape[0]
+differences = logits - logits_without011
+squares = differences ** 2
+
+# print the impact on the correct token, the current token, and the 3 other
+# tokens with the largest squared difference.
+correct_token = tokens[1:]
+logits_with_known_answer = logits[:-1]
+tokens_with_known_answer = tokens[:-1]
+str_tokens_with_known_answer = str_tokens[:-1]
+differences_with_known_answer = differences[:-1]
+current_logit = logits_with_known_answer[t.arange(seq-1), tokens_with_known_answer]
+correct_logit = logits_with_known_answer[t.arange(seq-1), correct_token]
+current_token_impact = differences_with_known_answer[t.arange(seq-1), tokens_with_known_answer]
+correct_token_impact = differences_with_known_answer[t.arange(seq-1), correct_token]
+
+str_tokens = model.to_str_tokens(tokens_with_known_answer)
+correct_str_tokens = model.to_str_tokens(correct_token)
+for i in range(seq-1):
+    print(f"{str_tokens[i]} ({current_logit[i]:.2f}{current_token_impact[i]:+.2f}) -> {correct_str_tokens[i]} ({correct_logit[i]:.2f}{correct_token_impact[i]:+.2f})")
+
+# %%
+
+# Result: it increases the correct token's logit, it does not decrease the
+# current token's logit. Darn.
