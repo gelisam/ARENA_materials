@@ -793,10 +793,7 @@ correct_logit = logits_with_known_answer[t.arange(seq-1), correct_token]
 current_token_impact = differences_with_known_answer[t.arange(seq-1), tokens_with_known_answer]
 correct_token_impact = differences_with_known_answer[t.arange(seq-1), correct_token]
 
-str_tokens = model.to_str_tokens(tokens_with_known_answer)
-correct_str_tokens = model.to_str_tokens(correct_token)
-for i in range(seq-1):
-    print(f"{str_tokens[i]} ({current_logit[i]:.2f}{current_token_impact[i]:+.2f}) -> {correct_str_tokens[i]} ({correct_logit[i]:.2f}{correct_token_impact[i]:+.2f})")
+imshow(t.stack([current_token_impact, correct_token_impact]))
 
 # %%
 
