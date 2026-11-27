@@ -765,30 +765,30 @@ imshow(
 # Well, the loss is different. So it must be affecting the final logits in some
 # way. Let's examine what that effect is.
 
-tokens = rep_tokens_batch # batch seq
+all_tokens_batch = rep_tokens_batch # batch seq
 
 # batch seq d_vocab
-logits = model(rep_tokens_batch, return_type="logits")
-logits_without011 = model.run_with_hooks(
-    rep_tokens_batch,
+all_logits = model(all_tokens_batch, return_type="logits")
+all_logits_without011 = model.run_with_hooks(
+    all_tokens_batch,
     return_type="logits",
     fwd_hooks=[(utils.get_act_name("result", 0), functools.partial(head_zero_ablation_hook, head_index_to_ablate=11))],
 )
 
 # %%
 
-batch, seq = rep_tokens_batch.shape
+batch, seq = all_tokens_batch.shape
 
 # batch seq d_vocab
-differences = logits - logits_without011
+all_differences = all_logits - all_logits_without011
 
 # batch seq-1
-correct_token = rep_tokens_batch[:, 1:]
-current_token = rep_tokens_batch[:, :-1]
+correct_token = all_tokens_batch[:, 1:]
+current_token = all_tokens_batch[:, :-1]
 
 # batch seq-1 d_vocab
-logits = logits[:, :-1]
-differences = differences[:, :-1]
+logits = all_logits[:, :-1]
+differences = all_differences[:, :-1]
 
 batch_ix = einops.repeat(t.arange(batch), "batch -> batch seq", seq=seq-1)
 seq_ix = einops.repeat(t.arange(seq-1), "seq -> batch seq", batch=batch)
