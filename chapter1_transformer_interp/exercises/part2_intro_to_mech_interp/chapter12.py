@@ -810,3 +810,175 @@ imshow(results)
 
 # Result: it increases the correct token's logit, it does not decrease the
 # current token's logit. Darn.
+#
+# I am giving up and reading the hint. "Can you figure out which source
+# positions are important to attend to for the model to perform well?" That's
+# not much of a hint, I already know that 0.4 attends to the last few positions,
+# and that 0.11 attends to itself.
+#
+# Let's read the solution. "Below is some sample code which plots the effect of
+# ablating the inputs to heads 0.4 and 0.11 at all offset positions minus a few
+# (e.g. the first row shows the effect on loss of mean ablating all inputs to
+# the heads except for those that come from self-attention, and the second row
+# shows the effect when we ablate all inputs except for those that come from the
+# token immediately before it in the sequence)." Let me at least write that code
+# myself.
+
+def hook_self_attention_only(
+    attn_scores: Float[Tensor, "batch n_heads seqQ seqK"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+):
+    batch, n_heads, seqQ, seqK = attn_scores.shape
+    q_ix = einops.repeat(
+        t.arange(seqQ),
+        'seqQ -> seqQ seqK',
+        seqK=seqK
+    )
+    k_ix = einops.repeat(
+        t.arange(seqK),
+        'seqK -> seqQ seqK',
+        seqQ=seqQ
+    )
+    attn_scores[:,head_index_to_ablate] = t.where(q_ix == k_ix, 1.0, -float('inf'))
+    return attn_scores
+
+def hook_prev_attention_only(
+    attn_scores: Float[Tensor, "batch n_heads seqQ seqK"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+):
+    batch, n_heads, seqQ, seqK = attn_scores.shape
+    q_ix = einops.repeat(
+        t.arange(seqQ),
+        'seqQ -> seqQ seqK',
+        seqK=seqK
+    )
+    k_ix = einops.repeat(
+        t.arange(seqK),
+        'seqK -> seqQ seqK',
+        seqQ=seqQ
+    )
+    attn_scores[:,head_index_to_ablate] = t.where(k_ix == q_ix - 1, 1.0, -float('inf'))
+    return attn_scores
+
+self_attention_only_scores = get_ablation_scores(
+    model,
+    rep_tokens_batch,
+    ablation_function=hook_self_attention_only,
+    neuron_name = "attn_scores"
+)
+
+prev_attention_only_scores = get_ablation_scores(
+    model,
+    rep_tokens_batch,
+    ablation_function=hook_prev_attention_only,
+    neuron_name = "attn_scores"
+)
+
+# %%
+
+imshow(
+    self_attention_only_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After forcing self-attention",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+imshow(
+    prev_attention_only_scores,
+    labels={"x": "Head", "y": "Layer", "color": "Loss diff"},
+    title="Loss Difference After forcing prev-attention",
+    text_auto=".2f",
+    width=900,
+    height=350,
+)
+
+# %%
+
+# Unsurprisingly, making head 0.11 attend to itself is helping, not hindering,
+# since that is the head's goal, while making it attend to the previous token
+# does have a consequence since it prevents that goal.
+#
+# I didn't look much at head 0.4 yet, but I do find it surprising is that head
+# 0.4 is affected by both changes, as I expected its job to be attending the
+# previous token.
+#
+# Let's try the solution's code:
+
+def head_z_ablation_hook(
+    z: Float[Tensor, "batch seq n_heads d_head"],
+    hook: HookPoint,
+    head_index_to_ablate: int,
+    seq_posns: list[int],
+    cache: ActivationCache,
+) -> None:
+    """
+    We perform ablation at the z vector, by doing the equivalent of mean ablating all the inputs to this attention head
+    except for those which come from the tokens `n` positions back, where `n` is in the `seq_posns` list.
+    """
+    batch, seq = z.shape[:2]
+    v = cache["v", hook.layer()][:, :, head_index_to_ablate]  # shape [batch seq_K d_head]
+    pattern = cache["pattern", hook.layer()][:, head_index_to_ablate]  # shape [batch seq_Q seq_K]
+
+    # Get a repeated version of v, and mean ablate all but the previous token values
+    v_repeated = einops.repeat(v, "b sK h -> b sQ sK h", sQ=seq)
+    v_ablated = einops.repeat(v_repeated.mean(0), "sQ sK h -> b sQ sK h", b=batch).clone()
+    for offset in seq_posns:
+        seqQ_slice = t.arange(offset, seq)
+        v_ablated[:, seqQ_slice, seqQ_slice - offset] = v_repeated[:, seqQ_slice, seqQ_slice - offset]
+
+    # Take weighted sum of this new v, and use it to edit `z` inplace.
+    z[:, :, head_index_to_ablate] = einops.einsum(v_ablated, pattern, "b sQ sK h, b sQ sK -> b sQ h")
+
+
+def get_ablation_scores_cache_assisted(
+    model: HookedTransformer,
+    tokens: Int[Tensor, "batch seq"],
+    ablation_function: Callable = head_zero_ablation_hook,
+    seq_posns: list[int] = [0],
+    layers: list[int] = [0],
+) -> Float[Tensor, "n_layers n_heads"]:
+    """
+    Version of `get_ablation_scores` which can use the cache to assist with the ablation.
+    """
+    ablation_scores = t.zeros((len(layers), model.cfg.n_heads), device=model.cfg.device)
+
+    model.reset_hooks()
+    seq_len = (tokens.shape[1] - 1) // 2
+    logits, cache = model.run_with_cache(tokens, return_type="logits")
+    loss_no_ablation = -get_log_probs(logits, tokens)[:, -(seq_len - 1) :].mean()
+
+    for i, layer in enumerate(layers):
+        for head in range(model.cfg.n_heads):
+            temp_hook_fn = functools.partial(ablation_function, head_index_to_ablate=head, cache=cache, seq_posns=seq_posns)
+            ablated_logits = model.run_with_hooks(tokens, fwd_hooks=[(utils.get_act_name("z", layer), temp_hook_fn)])
+            loss = -get_log_probs(ablated_logits, tokens)[:, -(seq_len - 1) :].mean()
+            ablation_scores[i, head] = loss - loss_no_ablation
+
+    return ablation_scores
+
+
+rep_tokens_batch = run_and_cache_model_repeated_tokens(model, seq_len=50, batch_size=50)[0]
+
+offsets = [[0], [1], [2], [3], [1, 2], [1, 2, 3]]
+z_ablation_scores = [
+    get_ablation_scores_cache_assisted(model, rep_tokens_batch, head_z_ablation_hook, offset).squeeze()
+    for offset in tqdm(offsets)
+]
+
+imshow(
+    t.stack(z_ablation_scores),
+    labels={"x": "Head", "y": "Position offset", "color": "Loss diff"},
+    title="Loss Difference (ablating heads everywhere except for certain offset positions)",
+    text_auto=".2f",
+    y=[str(offset) for offset in offsets],
+    width=900,
+    height=400,
+)
+
+# %%
+
+# Looks like the solution didn't manage to go further than I did, at least about
+# 0.11? They are just better at interpreting the results!
